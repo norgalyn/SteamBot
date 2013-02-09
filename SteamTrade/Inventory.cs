@@ -65,7 +65,7 @@ namespace SteamTrade
             return null;
         }
 
-        public List<Item> GetItemsByDefindex (int defindex)
+        public List<Item> GetItemsByDefindex(int defindex)
         {
             var items = new List<Item> ();
             foreach (Item item in Items)

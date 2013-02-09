@@ -308,7 +308,7 @@ namespace SteamTrade
         /// </returns>
         public bool AddItemByDefindex (int defindex)
         {
-            List<Inventory.Item> items = myInventory.GetItemsByDefindex (defindex);
+            List<Inventory.Item> items = myInventory.GetItemsByDefindex(defindex);
             foreach (Inventory.Item item in items)
             {
                 if (!myOfferedItems.ContainsValue (item.Id))
@@ -563,20 +563,21 @@ namespace SteamTrade
                         if (!isBot)
                         {
                             otherIsReady = true;
-                            OnUserSetReady (true);
+                            OnUserSetReady(true);
+                            
                         }
                         break;
                     case 3:
                         if (!isBot)
                         {
                             otherIsReady = false;
-                            OnUserSetReady (false);
+                            OnUserSetReady(false);
                         }
                         break;
                     case 4:
                         if (!isBot)
                         {
-                            OnUserAccept ();
+                            OnUserAccept();
                         }
                         break;
                     case 7:
@@ -725,7 +726,7 @@ namespace SteamTrade
             if (wasAdded && !myOfferedItems.ContainsValue (itemid))
                 throw new TradeException ("Steam Trade had an invalid item added: " + itemid);
 
-            // check if the correct item was removed
+            // check ifv the correct item was removed
             if (!wasAdded && myOfferedItems.ContainsValue (itemid))
                 throw new TradeException("Steam Trade had an invalid item removed: " + itemid);
         }

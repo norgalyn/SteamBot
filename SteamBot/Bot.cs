@@ -11,6 +11,20 @@ namespace SteamBot
 {
     public class Bot
     {
+        public enum TradeTypes
+        {
+            BuySpecific,
+            Sell
+        }
+
+        public int currentMetal = 0;
+        public int currentHat = 0;
+        DateTime RequestTime;
+        public int hatBuyPrice;
+        public int hatSellPrice;
+        public int craftHatSellPrice;
+        public int maxRequestTime;
+        public SteamTrade.Inventory myInventory = null;
         // If the bot is logged in fully or not.  This is only set
         // when it is.
         public bool IsLoggedIn = false;
@@ -75,6 +89,7 @@ namespace SteamBot
 
         string sessionId;
         string token;
+        public Request currentRequest = default(Request);
 
         public Bot(Configuration.BotInfo config, string apiKey, UserHandlerCreator handlerCreator, bool debug = false)
         {
@@ -86,6 +101,10 @@ namespace SteamBot
             MaximiumActionGap = config.MaximumActionGap;
             DisplayNamePrefix = config.DisplayNamePrefix;
             TradePollingInterval = config.TradePollingInterval <= 100 ? 800 : config.TradePollingInterval;
+            hatBuyPrice= config.HatBuyPrice;
+            hatSellPrice= config.HatSellPrice;
+            maxRequestTime= config.MaxRequestTime;
+            craftHatSellPrice = config.CraftHatSellPrice;
             Admins       = config.Admins;
             this.apiKey  = apiKey;
             AuthCode     = null;
@@ -148,7 +167,37 @@ namespace SteamBot
                     }
                 }
             }).Start ();
-
+            new Thread(() =>
+                {
+                    while (true)
+                    {
+                        Thread.Sleep(1000);
+                        if (currentRequest.User != null)
+                        {
+                            DateTime RequestTimeout = RequestTime.AddSeconds(maxRequestTime);
+                            int untilTradeTimeout = (int)Math.Round((RequestTimeout - DateTime.Now).TotalSeconds);
+                            if (untilTradeTimeout <= 0 && (MySQL.getItem().User != null))
+                            {
+                                SteamFriends.SendChatMessage(currentRequest.User, EChatEntryType.ChatMsg, "Sorry, but your request took too long");
+                                NewRequest(MySQL.RequestStatus.Timedout);
+                                log.Warn("Request timedout");
+                            }
+                        }
+                    }
+                }).Start();
+            new Thread(() =>
+            {
+                while (true)
+                {
+                    Thread.Sleep(1000);
+                    if (Trade.CurrentSchema != null)
+                    {
+                        MySQL.assignRequest(this);
+                        break;
+                    }
+                }
+            }).Start();
+            
             CallbackThread.Start();
             log.Success ("Done Loading Bot!");
             CallbackThread.Join();
@@ -193,6 +242,7 @@ namespace SteamBot
 
                 if (callback.Result == EResult.OK)
                 {
+
                     SteamUser.LogOn (new SteamUser.LogOnDetails
                          {
                         Username = Username,
@@ -216,7 +266,7 @@ namespace SteamBot
                 {
                     log.Error ("Login Error: " + callback.Result);
                 }
-
+                
                 if (callback.Result == EResult.AccountLogonDenied)
                 {
                     log.Interface ("This account is protected by Steam Guard.  Enter the authentication code sent to the proper email: ");
@@ -251,15 +301,21 @@ namespace SteamBot
 
                 if (Trade.CurrentSchema == null)
                     Trade.CurrentSchema = Schema.FetchSchema (apiKey);
-
-                log.Success ("Schema Downloaded!");
-
+                log.Success("Schema Downloaded!");
+                if (MySQL.getData("schema_version") != "5")
+                {
+                    log.Info("Updating database schema");
+                    MySQL.updateSchema();
+                }
+                else
+                    log.Info("Database schema Up-To-Date");
                 SteamFriends.SetPersonaName (DisplayNamePrefix+DisplayName);
                 SteamFriends.SetPersonaState (EPersonaState.Online);
 
                 log.Success ("Steam Bot Logged In Completely!");
 
                 IsLoggedIn = true;
+                CountInventory();
             });
             #endregion
 
@@ -360,6 +416,140 @@ namespace SteamBot
                 userHandlers [sid.ConvertToUInt64 ()] = CreateHandler (this, sid);
             }
             return userHandlers [sid.ConvertToUInt64 ()];
+        }
+
+        public void CountInventory()
+        {
+            currentHat = 0;
+            currentMetal = 0;
+            myInventory = Inventory.FetchInventory(SteamUser.SteamID.ConvertToUInt64(), apiKey);
+            if (myInventory == null)
+            {
+                throw new Exception("Could not fetch own inventory via Steam API!");
+            }
+            foreach (Inventory.Item item in myInventory.Items)
+            {
+                if (item.Defindex == 5000)
+                    currentMetal++;
+                if (item.Defindex == 5001)
+                    currentMetal += 3;
+                if (item.Defindex == 5002)
+                    currentMetal += 9;
+
+                if (Trade.CurrentSchema.GetItem(item.Defindex).CraftMaterialType == "hat")
+                    currentHat++;
+            }
+            updateInventoryCache();
+            log.Info("Current metal: " + currentMetal.ToString() + ". Current hats: " + currentHat.ToString() + ".");
+        }
+
+        public void DoRequest(Request request)
+        {
+            currentRequest = request;
+            RequestTime = DateTime.Now;
+
+            MySQL.setRequestStatus(request.ID, MySQL.RequestStatus.Proccesing);
+            if (SteamFriends.GetFriendRelationship(request.User) != EFriendRelationship.Friend)
+            {
+                SteamFriends.AddFriend(request.User);
+                new Thread(() =>
+                 {
+                     while (true)
+                     {
+                         if (SteamFriends.GetFriendPersonaName(request.User) != null)
+                             break;
+                     }
+                 }).Start();
+            }
+            string hats = "";
+            switch (request.TradeType)
+            {
+                case TradeTypes.BuySpecific:
+                    foreach (int DefIndex in Array.ConvertAll<string, int>(request.Data, int.Parse))
+                        hats += Trade.CurrentSchema.GetItem(DefIndex).ItemName + ", ";
+                    SteamFriends.SendChatMessage(request.User, EChatEntryType.ChatMsg, "Hi, you are buying these hats: " + hats + "for total of " + scrapToString(request.Data.Length * hatSellPrice) + " .");
+                    break;
+                case TradeTypes.Sell:
+                    SteamFriends.SendChatMessage(request.User, EChatEntryType.ChatMsg, "Hi, you can sell "+currentMetal/hatBuyPrice+" hats.");
+                    break;
+            }
+            log.Info("New request from: "+SteamFriends.GetFriendPersonaName(request.User));
+            SteamTrade.Trade(request.User);
+
+        }
+
+        public List<int> priceToDefIndex(int price)
+        {
+            int CurrentScrap = myInventory.GetItemsByDefindex(5000).Count;
+            int CurrentRec = myInventory.GetItemsByDefindex(5001).Count;
+            int CurrentRef = myInventory.GetItemsByDefindex(5002).Count;
+            int RefPrice = price / 9;
+            int RecPrice = (price - (RefPrice * 9)) / 3;
+            int ScrapPrice = price - (RefPrice * 9 + RecPrice * 3);
+            if (RefPrice > CurrentRef)
+            {
+                RefPrice -= RefPrice - CurrentRef;
+                RecPrice += (RefPrice - CurrentRef) * 3;
+            }
+            if (RecPrice > CurrentRec)
+            {
+                RecPrice--;
+                ScrapPrice += 3;
+            }
+            if (ScrapPrice > CurrentScrap)
+            {
+                return null;
+            }
+            List<int> result = new List<int>();
+            for (int i = 0; i < RefPrice; i++)
+            {
+                if (i < RefPrice)
+                    result.Add(5002);
+            }
+            for (int i = 0; i < RecPrice; i++)
+            {
+                if (i < RecPrice)
+                    result.Add(5001);
+            }
+            for (int i = 0; i < ScrapPrice; i++)
+            {
+                if (i < ScrapPrice)
+                    result.Add(5000);
+            }
+            return result;
+        }
+
+        public string scrapToString(int scrap)
+        {
+            return ((scrap / 9).ToString() + "." + ((scrap % 9) * 11).ToString());
+        }
+
+        public void updateInventoryCache()
+        {
+            MySQL.wipeBotInventory(SteamUser.SteamID);
+            Dictionary<int, int> counts = new Dictionary<int, int>();
+            foreach(Inventory.Item item in myInventory.Items)
+            {
+                if (counts.ContainsKey(item.Defindex))
+                    counts[item.Defindex]++;
+                else
+                    counts[item.Defindex] = 1;
+            }
+            foreach(KeyValuePair<int, int> kvp in counts)
+            {
+                MySQL.setBotInventory(SteamUser.SteamID,kvp.Key,kvp.Value);
+            }
+        }
+
+        public void NewRequest(MySQL.RequestStatus status)
+        {
+            if (MySQL.getUserRank(currentRequest.User) <= 0)
+                SteamFriends.RemoveFriend(currentRequest.User);
+            MySQL.setRequestStatus(currentRequest.ID, status);
+            if(CurrentTrade!=null)
+                CurrentTrade.CancelTrade();
+            currentRequest = default(Request);
+            MySQL.assignRequest(this);
         }
     }
 }

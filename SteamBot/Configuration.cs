@@ -53,6 +53,10 @@ namespace SteamBot
             public int TradePollingInterval { get; set; }
             public string LogLevel { get; set; }
             public ulong[] Admins;
+            public int HatBuyPrice { get; set; }
+            public int HatSellPrice { get; set; }
+            public int MaxRequestTime { get; set; }
+            public int CraftHatSellPrice { get; set; }
         }
     }
 }
